@@ -179,7 +179,8 @@ class FockPhysicsModel:
             basis(2, q.initial_qubit_state),
             basis(q.n_cav, q.initial_cavity_n),
         )
-        self.rho0 = self.psi0[:, None] @ hconj(self.psi0[:, None])
+        psi0_col = self.psi0.reshape((-1, 1))
+        self.rho0 = psi0_col @ hconj(psi0_col)
         self.collapse_ops = self._collapse_operators()
 
     @property
@@ -236,8 +237,8 @@ class FockPhysicsModel:
         mainly for the hidden experiment simulator.
         """
         if not self.collapse_ops:
-            psi = self.final_state(controls)
-            return psi[:, None] @ hconj(psi[:, None])
+            psi = self.final_state(controls).reshape((-1, 1))
+            return psi @ hconj(psi)
 
         p = self.physics_params
         e_qub, e_cav = self.control_fields(controls)

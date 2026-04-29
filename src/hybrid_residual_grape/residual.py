@@ -99,7 +99,17 @@ def residual_raw(model: RBFResidualModel, controls: jax.Array) -> jax.Array:
 
 
 def residual_logit(model: RBFResidualModel, controls: jax.Array) -> jax.Array:
-    return jnp.clip(
+    # The learned residual is only trusted locally, near measured pulses. The
+    # bias term helps fit the measured neighborhood, but multiplying by support
+    # prevents a global offset from being extrapolated to unsupported controls.
+    features = rbf_features(
+        controls,
+        model.centers,
+        model.active,
+        length_scale=model.length_scale,
+    )
+    support = jnp.max(features, axis=-1)
+    return support * jnp.clip(
         residual_raw(model, controls),
         -model.residual_clip,
         model.residual_clip,

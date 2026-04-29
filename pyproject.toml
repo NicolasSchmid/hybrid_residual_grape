@@ -5,15 +5,16 @@ description = "Hybrid physics-plus-RBF-residual GRAPE optimization from binary F
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "ipykernel>=7.2.0",
-    "jax>=0.10.0",
-    "jaxlib>=0.10.0",
-    "matplotlib>=3.10.9",
-    "numpy>=2.4.4",
-    "optax>=0.2.8",
-    "qutip>=5.2.3",
-    "scipy>=1.17.1",
-    "tqdm>=4.67.3",
+    "ipykernel",
+    "jax",
+    "jaxlib",
+    "matplotlib",
+    "numpy",
+    "optax",
+    "qutip",
+    "scipy",
+    "tqdm",
+    "jax[cuda12]"
 ]
 
 [build-system]

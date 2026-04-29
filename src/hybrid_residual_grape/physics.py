@@ -42,6 +42,10 @@ class PhysicsParams:
     grape_dispersive_frame: bool = True
     grape_cavity_iq: bool = True
     cavity_phase: float = 0.0
+    qubit_t1_us: float | None = None
+    qubit_t2_us: float | None = None
+    cavity_t1_us: float | None = None
+    cavity_t2_us: float | None = None
 
 
 def bspline_knots_on_interval(
@@ -175,6 +179,8 @@ class FockPhysicsModel:
             basis(2, q.initial_qubit_state),
             basis(q.n_cav, q.initial_cavity_n),
         )
+        self.rho0 = self.psi0[:, None] @ hconj(self.psi0[:, None])
+        self.collapse_ops = self._collapse_operators()
 
     @property
     def parameter_shape(self) -> tuple[int, int]:
@@ -222,8 +228,73 @@ class FockPhysicsModel:
         psi_final, _ = jax.lax.scan(step, self.psi0, (e_qub, e_cav, self.dt))
         return psi_final
 
+    def final_density(self, controls: jax.Array) -> jax.Array:
+        """Final density matrix with optional Lindblad decay/dephasing.
+
+        The nominal GRAPE model normally leaves all lifetime fields as ``None``
+        and uses the faster pure-state path. This mixed-state path is intended
+        mainly for the hidden experiment simulator.
+        """
+        if not self.collapse_ops:
+            psi = self.final_state(controls)
+            return psi[:, None] @ hconj(psi[:, None])
+
+        p = self.physics_params
+        e_qub, e_cav = self.control_fields(controls)
+        cavity_phase = jnp.exp(1j * p.cavity_phase)
+        if p.grape_cavity_iq:
+            e_cav = cavity_phase * 1j * jnp.conj(e_cav)
+        else:
+            e_cav = cavity_phase * e_cav
+        h_drift = self.h_drift()
+        collapse_ops = self.collapse_ops
+        collapse_daggers = tuple(hconj(op) for op in collapse_ops)
+        collapse_products = tuple(
+            op_dag @ op for op, op_dag in zip(collapse_ops, collapse_daggers)
+        )
+
+        def lindblad_rhs(rho):
+            rhs = jnp.zeros_like(rho)
+            for op, op_dag, op_dag_op in zip(
+                collapse_ops,
+                collapse_daggers,
+                collapse_products,
+            ):
+                rhs = rhs + op @ rho @ op_dag - 0.5 * (op_dag_op @ rho + rho @ op_dag_op)
+            return rhs
+
+        def step(rho, x):
+            eq, ec, dt = x
+            hmat = (
+                h_drift
+                + p.mu_qub * (eq * self.sigp + jnp.conj(eq) * self.sigm)
+                + p.mu_cav * (ec * self.adag + jnp.conj(ec) * self.a)
+            )
+            unitary = evol_hdt_exp(hmat, dt)
+            rho = unitary @ rho @ hconj(unitary)
+            rho = rho + dt * lindblad_rhs(rho)
+            rho = 0.5 * (rho + hconj(rho))
+            rho = rho / jnp.trace(rho)
+            return rho, None
+
+        rho_final, _ = jax.lax.scan(step, self.rho0, (e_qub, e_cav, self.dt))
+        return rho_final
+
     def photon_probability(self, controls: jax.Array, n: int | None = None) -> jax.Array:
         target_n = self.sim_config.target_n if n is None else n
+        if self.collapse_ops:
+            rho_final = self.final_density(controls)
+            rho_by_qubit = rho_final.reshape(
+                2,
+                self.sim_config.n_cav,
+                2,
+                self.sim_config.n_cav,
+            )
+            return (
+                rho_by_qubit[0, target_n, 0, target_n]
+                + rho_by_qubit[1, target_n, 1, target_n]
+            ).real
+
         psi_final = self.final_state(controls)
         psi_by_qubit = psi_final.reshape(2, self.sim_config.n_cav)
         return jnp.sum(jnp.abs(psi_by_qubit[:, target_n]) ** 2).real
@@ -241,3 +312,27 @@ class FockPhysicsModel:
             raise ValueError("This project expects quadratic B-splines.")
         if q.spline_skip_left < 0 or q.spline_skip_right < 0:
             raise ValueError("Spline skip counts must be non-negative.")
+
+    def _collapse_operators(self) -> tuple[jax.Array, ...]:
+        p = self.physics_params
+        ops = []
+
+        if p.qubit_t1_us is not None and p.qubit_t1_us > 0.0:
+            ops.append(jnp.sqrt(1.0 / p.qubit_t1_us) * self.sigm)
+
+        if p.qubit_t2_us is not None and p.qubit_t2_us > 0.0:
+            gamma1 = 0.0 if p.qubit_t1_us is None else 1.0 / p.qubit_t1_us
+            gamma_phi = max(1.0 / p.qubit_t2_us - 0.5 * gamma1, 0.0)
+            if gamma_phi > 0.0:
+                ops.append(jnp.sqrt(2.0 * gamma_phi) * self.qubit_excited)
+
+        if p.cavity_t1_us is not None and p.cavity_t1_us > 0.0:
+            ops.append(jnp.sqrt(1.0 / p.cavity_t1_us) * self.a)
+
+        if p.cavity_t2_us is not None and p.cavity_t2_us > 0.0:
+            gamma1 = 0.0 if p.cavity_t1_us is None else 1.0 / p.cavity_t1_us
+            gamma_phi = max(1.0 / p.cavity_t2_us - 0.5 * gamma1, 0.0)
+            if gamma_phi > 0.0:
+                ops.append(jnp.sqrt(2.0 * gamma_phi) * self.n_phot)
+
+        return tuple(ops)

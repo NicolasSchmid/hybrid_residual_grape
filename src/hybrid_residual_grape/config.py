@@ -29,3 +29,23 @@ def chi_rad_per_us(path: Path = CONFIGURATION_PATH) -> float:
 def self_kerr_rad_per_us(path: Path = CONFIGURATION_PATH) -> float:
     config = load_configuration(path)
     return khz_to_rad_per_us(config["self_Kerr_kHz"])
+
+
+def qubit_t1_us(path: Path = CONFIGURATION_PATH) -> float:
+    config = load_configuration(path)
+    return float(config["qubit_T1_us"])
+
+
+def qubit_t2_us(path: Path = CONFIGURATION_PATH) -> float:
+    config = load_configuration(path)
+    return float(config["qubit_T2_us"])
+
+
+def storage_t1_us(path: Path = CONFIGURATION_PATH) -> float:
+    config = load_configuration(path)
+    return float(config["storage_T1_us"])
+
+
+def storage_t2_us(path: Path = CONFIGURATION_PATH) -> float:
+    config = load_configuration(path)
+    return float(config["storage_T2_us"])

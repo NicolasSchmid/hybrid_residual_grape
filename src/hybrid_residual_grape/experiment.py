@@ -11,18 +11,21 @@ def sample_binomial_measurements(
     controls: jax.Array,
     key: jax.Array,
     *,
-    shots: int,
+    shots: int | jax.Array,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Simulate an experiment: one physics evolution plus binomial shot sampling."""
     key, shot_key = jax.random.split(key)
     true_probability = true_model.population_probability(controls)
+    if jnp.ndim(jnp.asarray(shots)) == 0:
+        shot_counts = jnp.full((controls.shape[0],), shots, dtype=jnp.float32)
+    else:
+        shot_counts = jnp.asarray(shots, dtype=jnp.float32)
     successes = jax.random.binomial(
         shot_key,
-        n=shots,
+        n=shot_counts,
         p=true_probability,
         shape=true_probability.shape,
     )
-    shot_counts = jnp.full((controls.shape[0],), shots, dtype=jnp.float32)
     return successes.astype(jnp.float32), shot_counts, true_probability, key
 
 

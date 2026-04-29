@@ -207,6 +207,14 @@ One round of the notebook does this:
 
 The full loop is in `hybrid_residual_grape.ipynb`.
 
+There is also a second notebook:
+
+```text
+adaptive_calibrated_grape.ipynb
+```
+
+That notebook keeps the same simulated experiment, but replaces the RBF residual by physical-parameter calibration. It fits low-dimensional nuisance parameters from binomial measurements, then re-runs GRAPE on the calibrated model with adaptive shot allocation.
+
 ## Code Map
 
 ![Code map](docs/images/code_map.png)
@@ -223,7 +231,9 @@ src/hybrid_residual_grape/
     grape.py            JAX/Optax L-BFGS pulse optimizer
     experiment.py       binomial measurement simulator
 hybrid_residual_grape.ipynb
-                        main tutorial and experiment notebook
+                        RBF residual tutorial and experiment notebook
+adaptive_calibrated_grape.ipynb
+                        physical-parameter calibration notebook
 ```
 
 No code imports from the older project folder.
@@ -235,6 +245,12 @@ From the project root:
 ```zsh
 uv sync
 uv run jupyter lab hybrid_residual_grape.ipynb
+```
+
+To run the calibrated-physics variant:
+
+```zsh
+uv run jupyter lab adaptive_calibrated_grape.ipynb
 ```
 
 The current `pyproject.toml` includes CUDA JAX because this was intended for DGX-style runs:

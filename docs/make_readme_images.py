@@ -339,42 +339,43 @@ def hybrid_model_math() -> None:
 
 
 def code_map() -> None:
-    d = Diagram(2200, 1300, "code_map.png")
+    d = Diagram(2200, 1500, "code_map.png")
     d.title("Code map: where each idea lives")
 
     modules = [
-        (90, 240, 610, 440, BLUE, "configuration.json + config.py", ["load chi, Kerr, T1/T2", "unit conversions", "hardware numbers"]),
-        (90, 545, 610, 785, YELLOW, "physics.py", ["SimulationConfig", "PhysicsParams", "FockPhysicsModel", "B-splines -> Hamiltonian -> P_n"]),
-        (840, 240, 1360, 440, GREEN, "residual.py", ["RBFResidualConfig", "fit_rbf_residual", "support-gated correction"]),
-        (840, 545, 1360, 785, PURPLE, "grape.py", ["HybridGrapeConfig", "bounded controls", "Optax L-BFGS", "jax.grad objective"]),
-        (1590, 240, 2110, 440, ORANGE, "experiment.py", ["sample binomial shots", "append dataset", "local noisy pulse batch"]),
-        (1590, 545, 2110, 785, RED, "hybrid_residual_grape.ipynb", ["orchestrates the loop", "plots diagnostics", "exports best_controls"]),
+        (80, 220, 560, 455, BLUE, "configuration + config.py", ["load chi, Kerr, T1/T2", "unit conversions", "hardware numbers"]),
+        (80, 560, 560, 820, YELLOW, "physics.py", ["SimulationConfig", "PhysicsParams", "FockPhysicsModel", "B-splines -> Hamiltonian -> P_n"]),
+        (710, 220, 1190, 455, GREEN, "residual.py", ["RBFResidualConfig", "fit_rbf_residual", "support-gated correction"]),
+        (710, 560, 1190, 820, PURPLE, "grape.py", ["HybridGrapeConfig", "bounded controls", "Optax L-BFGS", "jax.grad objective"]),
+        (1340, 220, 1820, 455, ORANGE, "calibration.py", ["binomial likelihood", "fit physical params", "adaptive shots + LCB"]),
+        (1340, 560, 1820, 820, RED, "experiment.py", ["sample binomial shots", "append dataset", "local noisy pulse batch"]),
+        (80, 950, 960, 1155, RED, "hybrid_residual_grape.ipynb", ["RBF residual closed loop", "diagnostics + best pulse"]),
+        (1120, 950, 2100, 1155, ORANGE, "adaptive_calibrated_grape.ipynb", ["physical calibration loop", "oracle true-GRAPE", "adaptive shot allocation"]),
     ]
     for x1, y1, x2, y2, color, title, body in modules:
         d.rect(x1, y1, x2, y2, color)
-        d.text(x1 + 35, y1 + 62, title, color=color, size=35)
-        d.multiline(x1 + 35, y1 + 120, body, color=WHITE, size=28, wrap_chars=35)
+        d.text(x1 + 35, y1 + 62, title, color=color, size=34)
+        d.multiline(x1 + 35, y1 + 118, body, color=WHITE, size=24, wrap_chars=38)
 
-    d.arrow(610, 340, 840, 340, WHITE)
-    d.arrow(610, 660, 840, 660, WHITE)
-    d.arrow(1360, 340, 1590, 660, GREEN)
-    d.arrow(1360, 660, 1590, 660, PURPLE)
-    d.arrow(1850, 545, 1850, 440, ORANGE)
-    d.arrow(1590, 660, 1360, 660, WHITE)
-    d.arrow(1110, 545, 1110, 440, WHITE)
+    d.arrow(560, 338, 710, 338, WHITE)
+    d.arrow(560, 690, 710, 690, WHITE)
+    d.arrow(1190, 338, 1340, 338, WHITE)
+    d.arrow(1190, 690, 1340, 690, WHITE)
+    d.arrow(1580, 455, 1580, 560, WHITE)
+    d.arrow(950, 820, 600, 950, PURPLE)
+    d.arrow(1580, 820, 1580, 950, ORANGE)
 
-    d.rect(225, 965, 1975, 1190, GRAY, fill="#0e141b", width=4, radius=18)
-    d.text(275, 1035, "Mental model", color=WHITE, size=42)
+    d.rect(225, 1250, 1975, 1455, GRAY, fill="#0e141b", width=4, radius=18)
+    d.text(275, 1310, "Mental model", color=WHITE, size=38)
     d.multiline(
         275,
-        1100,
+        1368,
         [
-            "physics.py tells us what GRAPE believes; experiment.py tells us what the binary test returned;",
-            "residual.py learns the disagreement; grape.py differentiates through the corrected surrogate.",
+            "RBF notebook: learn a local residual over pulses. Calibrated notebook: fit physical nuisance parameters, then run GRAPE.",
         ],
         color=MUTED,
-        size=31,
-        wrap_chars=100,
+        size=24,
+        wrap_chars=86,
     )
 
     d.save()

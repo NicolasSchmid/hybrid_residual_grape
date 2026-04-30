@@ -42,13 +42,13 @@ uv sync
 Run the RBF residual notebook:
 
 ```zsh
-uv run jupyter lab hybrid_residual_grape.ipynb
+uv run jupyter lab notebooks/01_rbf_residual_grape.ipynb
 ```
 
 Run the calibrated-physics notebook:
 
 ```zsh
-uv run jupyter lab adaptive_calibrated_grape.ipynb
+uv run jupyter lab notebooks/02_adaptive_calibrated_grape.ipynb
 ```
 
 The project is self-contained. It includes:
@@ -160,7 +160,7 @@ The hidden `P_true` is only plotted in the notebook to debug the method.
 Notebook:
 
 ```text
-hybrid_residual_grape.ipynb
+notebooks/01_rbf_residual_grape.ipynb
 ```
 
 This was the first attempt at a model-based correction.
@@ -248,7 +248,7 @@ The RBF notebook is still useful as a negative result and a diagnostic baseline.
 Notebook:
 
 ```text
-adaptive_calibrated_grape.ipynb
+notebooks/02_adaptive_calibrated_grape.ipynb
 ```
 
 This approach replaces the arbitrary RBF correction with a physically meaningful calibrated model.
@@ -491,11 +491,12 @@ src/hybrid_residual_grape/
   calibration.py   physical-parameter calibration and adaptive shot logic
   grape.py         JAX/Optax L-BFGS pulse optimization
 
-hybrid_residual_grape.ipynb
-  RBF residual experiment
+notebooks/
+  01_rbf_residual_grape.ipynb
+    RBF residual experiment
 
-adaptive_calibrated_grape.ipynb
-  physical calibration + adaptive GRAPE experiment
+  02_adaptive_calibrated_grape.ipynb
+    physical calibration + adaptive GRAPE experiment
 ```
 
 ## Current Recommendation

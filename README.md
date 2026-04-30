@@ -57,6 +57,12 @@ Run the RBF sanity-check notebook:
 uv run jupyter lab notebooks/03_rbf_sanity_checks.ipynb
 ```
 
+Run the feature-based RBF notebook:
+
+```zsh
+uv run jupyter lab notebooks/04_feature_based_rbf_grape.ipynb
+```
+
 The project is self-contained. It includes:
 
 ```text
@@ -598,6 +604,49 @@ certain high-power pulse shapes cause distortions not in the Hamiltonian model
 
 That is probably the right next step if calibrated GRAPE saturates below the desired fidelity.
 
+## Notebook 4: Feature-Based RBF Residual
+
+Notebook:
+
+```text
+notebooks/04_feature_based_rbf_grape.ipynb
+```
+
+This is the next residual experiment after the raw-RBF sanity checks.
+
+The old raw RBF learned:
+
+```text
+correction = f_RBF(u)
+```
+
+where `u` is the 80-dimensional vector of B-spline coefficients.
+
+The feature-based RBF learns instead:
+
+```text
+features = phi(u, nominal simulator)
+correction = f_RBF(features)
+```
+
+The current feature vector contains:
+
+```text
+P_phys
+mean / final / timing of qubit excitation
+mean / final / timing of photon number
+photon-number variance
+target photon arrival time
+qubit and cavity drive power
+pulse smoothness
+maximum coefficient
+```
+
+So two pulses that look different as coefficient vectors can still be close to
+each other if they have similar simulated trajectories. The hope is that this
+is much more sample-efficient than a raw 80-dimensional RBF, while still
+letting GRAPE differentiate through the corrected objective.
+
 ## Code Map
 
 ```text
@@ -606,6 +655,7 @@ src/hybrid_residual_grape/
   physics.py       B-splines, Hamiltonian, unitary/non-unitary evolution, P_n
   experiment.py    binomial measurement simulator
   residual.py      RBF/ridge residual model
+  feature_residual.py physics-informed feature RBF residual model
   calibration.py   physical-parameter calibration and adaptive shot logic
   grape.py         JAX/Optax L-BFGS pulse optimization
 
@@ -618,6 +668,9 @@ notebooks/
 
   03_rbf_sanity_checks.ipynb
     targeted RBF interpolation and low-dimensionality checks
+
+  04_feature_based_rbf_grape.ipynb
+    RBF residual over simulated trajectory features
 
 scripts/
   run_rbf_sanity_checks.py

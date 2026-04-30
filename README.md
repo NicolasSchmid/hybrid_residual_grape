@@ -51,6 +51,12 @@ Run the calibrated-physics notebook:
 uv run jupyter lab notebooks/02_adaptive_calibrated_grape.ipynb
 ```
 
+Run the RBF sanity-check notebook:
+
+```zsh
+uv run jupyter lab notebooks/03_rbf_sanity_checks.ipynb
+```
+
 The project is self-contained. It includes:
 
 ```text
@@ -215,6 +221,118 @@ hidden true MAE hybrid  -> true:   0.0391
 ![RBF progress](docs/results/rbf_progress.png)
 
 ![RBF diagnostics](docs/results/rbf_diagnostics.png)
+
+### RBF Sanity Checks
+
+The following checks were added after review:
+
+```zsh
+PYTHONPATH=. uv run python scripts/run_rbf_sanity_checks.py
+```
+
+If the project environment is already active, the same check can also be run as:
+
+```zsh
+PYTHONPATH=. python scripts/run_rbf_sanity_checks.py
+```
+
+or from:
+
+```text
+notebooks/03_rbf_sanity_checks.ipynb
+```
+
+The checks use a smaller Hilbert space so they run quickly. They are not meant
+to be another final-fidelity benchmark; they isolate whether the RBF residual
+behaves sensibly in the regimes where it should.
+
+#### 1. Seen Controls
+
+Question:
+
+```text
+Does the RBF predict correctly on controls that were already measured?
+```
+
+Answer: yes. On the synthetic seen-control check, the RBF fits its own measured
+domain essentially exactly:
+
+```text
+seen physics MAE -> measured: 0.134890
+seen hybrid  MAE -> measured: 0.000025
+
+seen physics MAE -> true:     0.134897
+seen hybrid  MAE -> true:     0.000110
+```
+
+This means the RBF implementation itself is not obviously broken. When the
+query pulse is one of the measured pulses, the residual model can interpolate
+the correction.
+
+![RBF seen-control sanity check](docs/results/rbf_seen_controls_sanity.png)
+
+#### 2. Reduced Two-Control Space
+
+Question:
+
+```text
+If the 80-dimensional pulse is restricted to two controls, does
+misspecified physics + RBF beat misspecified physics?
+```
+
+Answer: yes, in this controlled low-dimensional setting. We restrict the pulse
+to:
+
+```text
+u(a, b) = u0 + a d1 + b d2
+```
+
+and train the RBF on the two coordinates `(a, b)`, not on the full 80-vector.
+On a held-out grid:
+
+```text
+low-dim test physics MAE -> true: 0.129580
+low-dim test hybrid  MAE -> true: 0.096889
+fraction of grid improved:       0.539753
+```
+
+So the review intuition is right: RBFs can help when the effective control
+space is small and the residual is smooth enough.
+
+![RBF low-dimensional sanity check](docs/results/rbf_low_dimensional_sanity.png)
+
+#### Response To The Review
+
+The physical-parameter residual is more expressive than the nominal model, but
+it is still a physical model. It can only correct errors lying in the span of
+the fitted parameters. For example, adding a fourth-order Kerr-like parameter
+does not guarantee that we can compensate a wrong second-order Kerr estimate;
+it may only mimic that error over a narrow pulse family. This is why the
+calibrated-GRAPE model should be interpreted as a physically constrained local
+calibration, not a universal misspecification corrector.
+
+The RBF checks sharpen the diagnosis:
+
+1. The RBF can fit measured controls.
+2. The RBF can improve a deliberately misspecified model on a two-dimensional
+   control manifold.
+3. The RBF failed in the main 80-dimensional pulse search because the measured
+   dataset is sparse relative to the raw control dimension, and because the
+   residual depends on dynamical trajectory features, not just the final vector
+   of B-spline coefficients.
+
+So the current conclusion is not "RBFs are useless." It is:
+
+```text
+raw 80-dimensional RBF residuals are the wrong residual representation
+for the full closed-loop GRAPE problem.
+```
+
+This supports the next direction: either fit identifiable physical parameters,
+or use a residual model whose inputs are lower-dimensional physics-informed
+features, such as transient qubit excitation, photon-number trajectory moments,
+integrated drive power, or time-resolved sensitivity features from the
+calibrated simulator.
 
 ### Interpretation
 
@@ -497,6 +615,13 @@ notebooks/
 
   02_adaptive_calibrated_grape.ipynb
     physical calibration + adaptive GRAPE experiment
+
+  03_rbf_sanity_checks.ipynb
+    targeted RBF interpolation and low-dimensionality checks
+
+scripts/
+  run_rbf_sanity_checks.py
+    reproducible version of the RBF sanity checks
 ```
 
 ## Current Recommendation

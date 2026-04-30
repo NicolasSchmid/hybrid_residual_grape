@@ -1,68 +1,75 @@
-# Hybrid Residual GRAPE
+# Hybrid Residual GRAPE: Closed-Loop Fock-State Preparation
 
-This project is a small research sandbox for closed-loop preparation of a Fock state in a 3D cavity coupled to a qubit.
+This repository explores closed-loop preparation of a cavity Fock state using a qubit-cavity control model and binary experimental feedback.
 
-The target is simple to state:
+The physical goal is:
 
 ```text
-Find one pulse u that prepares |n> photons in the cavity.
+prepare |n> photons in the 3D cavity with one shaped pulse
 ```
 
-The hard part is that the real experiment does not directly return the full quantum state. It only returns binary photon-number-test shots:
+The experimental feedback is deliberately limited. For a pulse `u`, the experiment can only run a photon-number-selective qubit test and return binary outcomes:
 
 ```text
 1 = the cavity had exactly n photons
-0 = it did not
+0 = otherwise
 ```
 
-So each candidate pulse gives a noisy estimate
+After `N` repetitions, the measured reward is
 
 ```text
-y = successes / shots ~= P_n(u)
+y = successes / N ~= P_n(u).
 ```
 
-where `P_n(u)` is the probability that the cavity contains `n` photons after the pulse.
+The main question of this project is:
 
-This repository explores a hybrid strategy:
+> Can we use binary measurements to improve over GRAPE performed on an imperfect physics model?
+
+There are currently two approaches in the repository:
+
+1. **RBF residual GRAPE**: learn a flexible local residual correction on top of the physics model.
+2. **Adaptive calibrated GRAPE**: fit a small set of physical nuisance parameters, then re-run GRAPE on the calibrated model.
+
+The latest runs suggest that the second approach is much more promising.
+
+## Quick Start
+
+```zsh
+cd ~/coding/hybrid_residual_grape
+uv sync
+```
+
+Run the RBF residual notebook:
+
+```zsh
+uv run jupyter lab hybrid_residual_grape.ipynb
+```
+
+Run the calibrated-physics notebook:
+
+```zsh
+uv run jupyter lab adaptive_calibrated_grape.ipynb
+```
+
+The project is self-contained. It includes:
 
 ```text
-use GRAPE gradients from a physics model
-+ learn a small residual correction from binary measurements
-+ re-run GRAPE through the corrected model
+configuration.json
+toolbox/
+src/hybrid_residual_grape/
 ```
 
-![Closed-loop overview](docs/images/closed_loop_overview.png)
+No code imports from the older project folder.
 
-## The Big Idea
+## The Control Parameterization
 
-Plain GRAPE is powerful because it uses gradients through a differentiable simulator. But in the lab, the simulator is never perfect. There may be small detunings, drive calibration errors, missing Kerr terms, decay, dephasing, leakage, or other effects.
-
-Pure black-box optimization is honest about the experiment, but it is data hungry in an 80-dimensional pulse space.
-
-This code tries to sit between the two:
+The pulse is represented by 80 real parameters:
 
 ```text
-P_hybrid(u) = physics prediction + learned local correction
+u in R^80 = 4 real channels x 20 B-spline coefficients
 ```
 
-More precisely, the code works in logit space:
-
-```text
-logit(P_hybrid(u)) =
-    logit(P_phys(u)) + support(u) * f_RBF(u)
-```
-
-The physics model gives smooth gradients. The residual model learns where the physics prediction disagrees with measured data.
-
-## What Is Being Optimized?
-
-The control pulse is represented by 80 real numbers:
-
-```text
-4 real channels x 20 quadratic B-spline coefficients
-```
-
-The four channels are:
+The four real channels are:
 
 ```text
 qubit I
@@ -71,311 +78,436 @@ cavity I
 cavity Q
 ```
 
-The B-spline basis follows the feedback-GRAPE style: quadratic splines, first and last two skipped, so all basis pulses have the same shape shifted in time and the pulse starts and ends at zero. At most three basis functions overlap at any instant.
+The waveform basis uses quadratic B-splines, with the first and last two splines skipped. This matches the feedback-GRAPE-style hardware-compatible parameterization:
 
-The optimizer does not directly edit waveform samples. It edits the B-spline coefficients `u`, then `physics.py` turns those coefficients into time-dependent qubit and cavity drives.
+```text
+pulse starts and ends at zero
+all basis functions have the same shape, shifted in time
+at most 3 basis functions overlap at once
+```
 
-## The Physics Model
+The optimizer never directly edits every waveform sample. It edits B-spline coefficients, then `physics.py` turns those coefficients into qubit and cavity drive envelopes.
 
-The nominal model lives in `src/hybrid_residual_grape/physics.py`.
+## The Simulator
 
-It simulates the qubit-cavity system in the co-rotating/dispersive frame using JAX arrays and the local `toolbox/` quantum-mechanics utilities. The main class is:
+The core simulator is:
 
 ```python
 FockPhysicsModel
 ```
 
-Its most important method is:
+defined in:
+
+```text
+src/hybrid_residual_grape/physics.py
+```
+
+Its central method is:
 
 ```python
 photon_probability(controls) -> P_n
 ```
 
-That returns the probability of finding exactly the target photon number in the cavity after applying the pulse.
+The simulator supports two evolution modes:
 
-The nominal model is the model GRAPE believes. In the notebook, there is also a hidden `true_model` used only to simulate the experiment. The hidden model can include small mismatches such as:
+```text
+no collapse operators       -> pure-state unitary evolution
+T1/T2 collapse operators    -> density-matrix non-unitary evolution
+```
+
+The non-unitary path includes Lindblad-style T1/T2 decay and dephasing. This is slower, but it allows GRAPE to optimize through open-system dynamics.
+
+In the notebooks, there are usually three models:
+
+```text
+physics_model       nominal model used by the pure-GRAPE baseline
+calibrated_model    fitted physical model used by adaptive calibrated GRAPE
+true_model          hidden simulator used only to mimic the real experiment
+```
+
+On hardware, `true_model` should disappear and be replaced by the OPX photon-number measurement.
+
+## What Is Being Measured?
+
+In simulation, the experiment is:
+
+```python
+P_true = true_model.population_probability(u)
+successes ~ Binomial(shots, P_true)
+```
+
+In the real experiment, the same function should become:
+
+```text
+send pulse u to OPX
+play pulse
+apply long selective pi pulse for photon number n
+read out qubit
+repeat shots times
+return successes
+```
+
+The optimizer only sees:
+
+```text
+u_i, successes_i, shots_i
+```
+
+The hidden `P_true` is only plotted in the notebook to debug the method.
+
+## Notebook 1: RBF Residual GRAPE
+
+Notebook:
+
+```text
+hybrid_residual_grape.ipynb
+```
+
+This was the first attempt at a model-based correction.
+
+The idea was to keep the differentiable physics simulator, but add a learned correction:
+
+```text
+logit(P_hybrid(u)) = logit(P_phys(u)) + support(u) f_RBF(u)
+```
+
+The RBF model is trained on residuals:
+
+```text
+r_i = logit(y_i) - logit(P_phys(u_i))
+```
+
+where:
+
+```text
+y_i = successes_i / shots_i
+```
+
+The RBF correction is support-gated so it fades away far from measured pulses:
+
+```text
+support(u) -> 0  =>  P_hybrid(u) -> P_phys(u)
+```
+
+This was intended to prevent unsupported extrapolation.
+
+### RBF Result
+
+In the latest RBF run with hidden Kerr and T1/T2 effects, the method did **not** improve over pure GRAPE.
+
+The key result was:
+
+```text
+physics-only GRAPE true P_n:       0.9524
+RBF hybrid best true P_n:          0.9493
+```
+
+The calibration diagnostic also showed that the RBF made prediction error worse:
+
+```text
+measured MAE physics -> data:      0.0373
+measured MAE hybrid  -> data:      0.0392
+
+hidden true MAE physics -> true:   0.0361
+hidden true MAE hybrid  -> true:   0.0391
+```
+
+![RBF progress](docs/results/rbf_progress.png)
+
+![RBF diagnostics](docs/results/rbf_diagnostics.png)
+
+### Interpretation
+
+The RBF saw only the final pulse vector:
+
+```text
+u in R^80
+```
+
+and the final scalar reward:
+
+```text
+P_n(u)
+```
+
+But the missing physics is dynamical:
+
+```text
+T1 loss depends on time-integrated excitation
+dephasing depends on time spent in sensitive superpositions
+Kerr and detuning errors accumulate phase during the pulse
+drive-scale errors distort the whole trajectory
+```
+
+So a raw 80-dimensional local interpolator was not the right object. It could fit local data, but did not generalize well enough to guide GRAPE.
+
+The RBF notebook is still useful as a negative result and a diagnostic baseline.
+
+## Notebook 2: Adaptive Calibrated GRAPE
+
+Notebook:
+
+```text
+adaptive_calibrated_grape.ipynb
+```
+
+This approach replaces the arbitrary RBF correction with a physically meaningful calibrated model.
+
+Instead of learning:
+
+```text
+arbitrary correction over u in R^80
+```
+
+we fit a small number of physical nuisance parameters:
 
 ```text
 chi offset
 cavity detuning
 qubit detuning
-drive scale errors
-cavity phase error
 cavity self-Kerr
-T1/T2 decay and dephasing
+qubit drive scale
+cavity drive scale
+cavity phase
+qubit T1/T2 scale
+cavity T1/T2 scale
 ```
 
-On real hardware, the hidden true model disappears and is replaced by OPX measurements.
+The calibrated model is then used inside GRAPE.
 
-## The Measurement Model
+### Statistical Objective
 
-The experiment model lives in `src/hybrid_residual_grape/experiment.py`.
-
-In the notebook, it does this:
-
-```python
-true_probability = true_model.population_probability(controls)
-successes ~ Binomial(shots, true_probability)
-```
-
-This is meant to mimic what the real photon-number test gives:
+The calibration uses the binomial likelihood of the measured data:
 
 ```text
-send pulse to OPX
-run selective qubit pi pulse for photon number n
-read out the qubit
-repeat N times
-return successes / N
+successes_i ~ Binomial(shots_i, P_model(u_i; theta))
 ```
 
-The optimizer only gets the binomial data. The exact hidden `P_true` is plotted only for diagnostics in simulation.
-
-## The RBF Residual
-
-The residual model lives in `src/hybrid_residual_grape/residual.py`.
-
-RBF means radial basis function. It is a smooth local interpolation model over the 80-dimensional pulse space.
-
-For each measured pulse `u_i`, the code stores:
+Equivalently, it minimizes the negative log-likelihood:
 
 ```text
-u_i
-successes_i
-shots_i
-P_phys(u_i)
+L(theta) =
+  - sum_i [
+      successes_i log P_model(u_i; theta)
+      + (shots_i - successes_i) log(1 - P_model(u_i; theta))
+    ]
+  + prior(theta)
 ```
 
-Then it computes the residual target:
+The prior keeps parameters in a realistic range. For example, detunings are bounded to tens of kHz, drive-scale errors to a few percent, and lifetime scale factors stay near the values from `configuration.json`.
+
+### Closed-Loop Algorithm
+
+Each round does:
 
 ```text
-r_i = logit(successes_i / shots_i) - logit(P_phys(u_i))
+1. Fit physical parameters theta from all accumulated measurements.
+2. Build calibrated_model = FockPhysicsModel(q, theta).
+3. Run GRAPE on calibrated_model.
+4. Measure the proposed pulse and nearby noisy variants.
+5. Allocate more shots to promising high-fidelity pulses.
+6. Select the best pulse using a lower confidence bound.
 ```
 
-So the residual is not trying to learn the whole experiment from scratch. It is only trying to learn the mismatch between measured data and the physics model.
+The lower confidence bound avoids selecting a pulse only because it had a lucky binomial fluctuation.
 
-![RBF residual math](docs/images/hybrid_model_math.png)
+### Unitary vs Non-Unitary Evolution
 
-The fitted model has the form:
+This is important.
+
+The nominal baseline uses:
 
 ```text
-f_RBF(u) = b + sum_k w_k exp(-||u - c_k||^2 / (2 l^2))
+physics_model with no T1/T2
+=> unitary pure-state GRAPE
 ```
 
-where the centers `c_k` are measured pulses.
-
-The correction is support-gated:
+The true hidden experiment uses:
 
 ```text
-logit(P_hybrid) = logit(P_phys) + support(u) * clip(f_RBF(u))
+true_model with T1/T2
+=> non-unitary density-matrix evolution
 ```
 
-This matters. Far from measured pulses, `support(u)` goes to zero, so the optimizer falls back to the nominal physics model instead of trusting a wild extrapolated correction.
-
-## The GRAPE Step
-
-The optimizer lives in `src/hybrid_residual_grape/grape.py`.
-
-It runs L-BFGS on the B-spline coefficients. The objective is evaluated by:
+The calibrated model also fits T1/T2 scale factors:
 
 ```text
-controls u
--> physics simulator P_phys(u)
--> RBF correction P_hybrid(u)
--> maximize P_hybrid(u)
+calibrated_model with fitted T1/T2
+=> non-unitary density-matrix GRAPE
 ```
 
-Because the physics simulator and residual model are JAX functions, the code can use automatic differentiation:
+So adaptive calibrated GRAPE is not merely evaluating decay after the fact. It optimizes the pulse through the non-unitary model once lifetimes are included.
 
-```python
-jax.grad(objective)
-```
+This is slower than unitary GRAPE, but it is the correct direction if we want the optimizer to avoid trajectories that are unnecessarily exposed to qubit/cavity decay and dephasing.
 
-This is GRAPE in the practical sense: gradient-based pulse optimization through a differentiable quantum dynamics model. The optimization is warm-started from the previous best pulse, so each closed-loop round does not restart from zero.
+## Adaptive Calibrated Result
 
-## The Closed-Loop Algorithm
-
-One round of the notebook does this:
+The latest executed notebook showed a real improvement.
 
 ```text
-1. Fit the RBF residual from all accumulated measurements.
-2. Run AD-GRAPE through physics + RBF.
-3. Take the proposed pulse and local noisy variants.
-4. Simulate or run binary photon-number measurements.
-5. Append the results to the dataset.
-6. Track the best high-shot measured pulse.
+nominal pure GRAPE true P_n:        0.95167
+oracle true-GRAPE true P_n:         0.96165
+adaptive calibrated GRAPE true P_n: 0.96272
 ```
 
-The full loop is in `hybrid_residual_grape.ipynb`.
-
-There is also a second notebook:
+The calibrated method improved over the nominal pure-GRAPE baseline by about:
 
 ```text
-adaptive_calibrated_grape.ipynb
+0.96272 - 0.95167 ~= 0.01105
 ```
 
-That notebook keeps the same simulated experiment, but replaces the RBF residual by physical-parameter calibration. It fits low-dimensional nuisance parameters from binomial measurements, then re-runs GRAPE on the calibrated model with adaptive shot allocation.
+or roughly a 1.1 percentage point absolute gain.
+
+The calibration also dramatically improved model agreement with the simulated experiment:
+
+```text
+measured MAE nominal -> data:       0.03106
+measured MAE calibrated -> data:    0.00528
+
+hidden true MAE nominal -> true:    0.03056
+hidden true MAE calibrated -> true: 0.00154
+```
+
+This is the most important evidence so far: the calibrated physical model is actually learning the mismatch, while the RBF residual did not.
+
+![Adaptive calibrated progress](docs/results/calibrated_progress.png)
+
+![Adaptive calibrated parameter traces](docs/results/calibrated_parameters.png)
+
+![Adaptive calibrated diagnostics](docs/results/calibrated_diagnostics.png)
+
+## What Did We Learn?
+
+### 1. Pure GRAPE is already strong
+
+Even with an intentionally incomplete nominal model, pure GRAPE reached around:
+
+```text
+P_n ~= 0.952
+```
+
+on the hidden non-unitary experiment.
+
+This means the baseline is not weak. Any closed-loop method has to beat a strong optimizer, not a random pulse search.
+
+### 2. Raw RBF residuals are probably the wrong correction
+
+The RBF residual was too unconstrained and too blind to the dynamics.
+
+It only saw:
+
+```text
+u -> final scalar reward
+```
+
+but the errors depend on the trajectory:
+
+```text
+population vs time
+phase accumulation vs time
+qubit excitation vs time
+cavity occupation vs time
+```
+
+So the next residual model should not be a generic RBF over the raw 80 coefficients.
+
+### 3. Physical calibration is promising
+
+The calibrated model improved both:
+
+```text
+prediction quality
+final pulse fidelity
+```
+
+This suggests that a lot of the mismatch can be explained by low-dimensional physical parameters.
+
+### 4. Shot allocation matters
+
+Near high fidelity, binomial noise is comparable to the remaining error.
+
+For example, with `P = 0.96` and `N = 1000`:
+
+```text
+std(y) = sqrt(P(1-P)/N) ~= 0.0062
+```
+
+That is large enough to select lucky pulses if we only look at raw `successes / shots`.
+
+The adaptive notebook therefore uses:
+
+```text
+cheap shots for exploration
+more shots for promising pulses
+lower confidence bound for best-pulse selection
+```
+
+## What If The True Experiment Is Not Captured By These Parameters?
+
+That is likely in the real experiment. The physical calibration model is still only an approximation.
+
+The next layer should probably not be another RBF over raw pulse coefficients. A better residual would use **trajectory features** computed from the calibrated model.
+
+For example:
+
+```text
+P_calibrated(u)
+integral cavity population dt
+integral qubit excitation dt
+maximum cavity population
+maximum qubit excitation
+pulse energy
+pulse smoothness
+time center-of-mass of cavity population
+time center-of-mass of qubit excitation
+```
+
+Then a small residual model could learn:
+
+```text
+P_experiment(u) - P_calibrated(u)
+```
+
+from physically meaningful features rather than from raw 80-dimensional controls.
+
+This would let the model learn effects like:
+
+```text
+pulses that populate the cavity too early suffer more loss
+pulses that leave the qubit excited too long suffer more T1
+certain high-power pulse shapes cause distortions not in the Hamiltonian model
+```
+
+That is probably the right next step if calibrated GRAPE saturates below the desired fidelity.
 
 ## Code Map
 
-![Code map](docs/images/code_map.png)
-
-The project is intentionally self-contained:
-
 ```text
-configuration.json      copied experimental parameters
-toolbox/                local quantum-mechanics helpers
 src/hybrid_residual_grape/
-    config.py           unit conversions and config loading
-    physics.py          B-splines, Hamiltonian, state evolution, P_n
-    residual.py         RBF/ridge residual correction
-    grape.py            JAX/Optax L-BFGS pulse optimizer
-    experiment.py       binomial measurement simulator
+  config.py        load configuration.json and unit conversions
+  physics.py       B-splines, Hamiltonian, unitary/non-unitary evolution, P_n
+  experiment.py    binomial measurement simulator
+  residual.py      RBF/ridge residual model
+  calibration.py   physical-parameter calibration and adaptive shot logic
+  grape.py         JAX/Optax L-BFGS pulse optimization
+
 hybrid_residual_grape.ipynb
-                        RBF residual tutorial and experiment notebook
+  RBF residual experiment
+
 adaptive_calibrated_grape.ipynb
-                        physical-parameter calibration notebook
+  physical calibration + adaptive GRAPE experiment
 ```
 
-No code imports from the older project folder.
+## Current Recommendation
 
-## Running The Notebook
-
-From the project root:
-
-```zsh
-uv sync
-uv run jupyter lab hybrid_residual_grape.ipynb
-```
-
-To run the calibrated-physics variant:
-
-```zsh
-uv run jupyter lab adaptive_calibrated_grape.ipynb
-```
-
-The current `pyproject.toml` includes CUDA JAX because this was intended for DGX-style runs:
-
-```toml
-"jax[cuda12]"
-```
-
-If you run on a CPU-only laptop, you may need to remove the CUDA extra and use ordinary CPU JAX instead.
-
-## How To Read The Results
-
-The most important comparison is:
+The current best direction is:
 
 ```text
-physics-only GRAPE baseline
-vs
-closed-loop hybrid residual GRAPE
+1. Continue with adaptive calibrated GRAPE.
+2. Increase oracle true-GRAPE effort to estimate the real ceiling.
+3. Increase shots for final pulse validation.
+4. Add held-out measurement likelihood for calibration.
+5. If needed, add a small trajectory-feature residual model on top of calibrated physics.
 ```
 
-The baseline must be fair:
-
-```text
-1. Run a full GRAPE optimization on the nominal physics model only.
-2. Pick the best nominal-model pulse.
-3. Evaluate that pulse on the hidden true model.
-```
-
-If the physics-only pulse already reaches very high fidelity on the hidden true model, there may be little room for the RBF to help. That is a good result: it means the nominal physics model is already excellent.
-
-At high fidelity, do not only look at `P_n`. Plot:
-
-```text
--log10(1 - P_n)
-```
-
-because a change from `0.998` to `0.999` is visually tiny in `P_n`, but it halves the infidelity.
-
-![Reading diagnostics](docs/images/reading_the_diagnostics.png)
-
-## How To Tell Whether The RBF Helped
-
-The RBF is useful only if it learns a real, repeatable model mismatch.
-
-Good signs:
-
-```text
-hybrid prediction fits measured data better than physics-only
-hybrid - physics has the same sign as measured - physics
-held-out measurement likelihood improves
-best validated pulse improves over physics-only GRAPE
-corrections happen where RBF support is high
-```
-
-Bad signs:
-
-```text
-physics and hidden truth agree, but RBF pulls away
-RBF correction is large where support is low
-training data fit improves but held-out measurements do not
-the optimizer exploits the residual and proposes unsupported pulses
-```
-
-The notebook includes plots for exactly these questions.
-
-## Why Add A Hidden Open-System Stress Test?
-
-The notebook can deliberately make the hidden experiment harder than the nominal model. For example, the hidden simulator may include:
-
-```text
-cavity self-Kerr
-T1/T2 decay
-dephasing
-small detunings
-drive scale mismatch
-```
-
-while the nominal GRAPE model omits some of these. This tests whether the residual can learn that the real experiment is systematically worse or shifted relative to the model.
-
-Important limitation: decay is not a coherent Hamiltonian error. An RBF residual can learn that certain pulses perform worse than the unitary model predicts, but it cannot undo photon loss. For that, the best solution is usually to include decoherence in the physics model or shorten/improve the pulse.
-
-## Important Limitations
-
-This is a research prototype, not a finished control stack.
-
-Current simplifications:
-
-```text
-the qubit is modeled as two levels
-qubit anharmonicity/leakage is not included
-the RBF is a local correction, not a full replacement model
-the true model exists only in simulation
-hardware communication is represented by a Python function
-```
-
-To include qubit self-Kerr or transmon leakage, the simulator should be extended from a two-level qubit to at least a three-level transmon model.
-
-## Suggested Next Experiments
-
-Useful things to test next:
-
-```text
-1. Sweep mismatch strength:
-   chi offset, detuning, drive scale, cavity phase, Kerr, T1/T2.
-
-2. Add held-out validation:
-   reserve some measured pulses and compare physics-only vs hybrid likelihood.
-
-3. Fit physical nuisance parameters:
-   chi, detuning, drive scale, phase, Kerr.
-   This may generalize better than an 80D residual.
-
-4. Use RBF only as a leftover correction:
-   calibrated physics model first, residual second.
-
-5. Validate best pulses with many shots:
-   near 99.9%, shot noise can be comparable to the remaining infidelity.
-```
-
-## Regenerating The README Images
-
-The README images are PNGs generated by ImageMagick:
-
-```zsh
-python3 docs/make_readme_images.py
-```
-
-They are intentionally not SVGs, and they are generated deterministically so labels stay accurate.
+I would not invest further in the raw RBF residual unless it is only used as a very local diagnostic tool.

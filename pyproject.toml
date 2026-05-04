@@ -14,7 +14,8 @@ dependencies = [
     "qutip",
     "scipy",
     "tqdm",
-    "jax[cuda12]"
+    "jax[cuda12]",
+    "dynamiqs>=0.3.4",
 ]
 
 [build-system]

@@ -74,6 +74,8 @@ def trajectory_features(
     q = physics_model.sim_config
     controls = jnp.asarray(controls, dtype=jnp.float32).reshape((-1,))
     e_qub, e_cav = physics_model.control_fields(controls)
+    qubit_phase = jnp.exp(1j * p.qubit_phase)
+    e_qub = qubit_phase * e_qub
     cavity_phase = jnp.exp(1j * p.cavity_phase)
     if p.grape_cavity_iq:
         e_cav_for_hamiltonian = cavity_phase * 1j * jnp.conj(e_cav)

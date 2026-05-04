@@ -23,6 +23,7 @@ class PhysicalCalibrationConfig:
     max_cavity_self_kerr_abs_khz: float = 2.0
     max_drive_scale_fraction: float = 0.06
     max_cavity_phase_rad: float = 0.10
+    max_qubit_phase_rad: float = 0.10
     max_lifetime_log_scale: float = 0.70
     fit_decoherence: bool = True
     prior_strength: float = 2e-3
@@ -42,6 +43,7 @@ def physical_parameter_names(
         "mu_qub_scale",
         "mu_cav_scale",
         "cavity_phase",
+        "qubit_phase",
     )
     if config.fit_decoherence:
         names = names + (
@@ -87,13 +89,14 @@ def params_from_calibration_raw(
         1.0 + config.max_drive_scale_fraction * bounded[5]
     )
     cavity_phase = config.max_cavity_phase_rad * bounded[6]
+    qubit_phase = config.max_qubit_phase_rad * bounded[7]
 
     qubit_t1_us = None
     qubit_t2_us = None
     cavity_t1_us = None
     cavity_t2_us = None
     if config.fit_decoherence:
-        lifetime_scale = jnp.exp(config.max_lifetime_log_scale * bounded[7:11])
+        lifetime_scale = jnp.exp(config.max_lifetime_log_scale * bounded[8:12])
         qubit_t1_us = reference_params.qubit_t1_us * lifetime_scale[0]
         qubit_t2_us = reference_params.qubit_t2_us * lifetime_scale[1]
         cavity_t1_us = reference_params.cavity_t1_us * lifetime_scale[2]
@@ -109,6 +112,7 @@ def params_from_calibration_raw(
         grape_dispersive_frame=nominal_params.grape_dispersive_frame,
         grape_cavity_iq=nominal_params.grape_cavity_iq,
         cavity_phase=cavity_phase,
+        qubit_phase=qubit_phase,
         qubit_t1_us=qubit_t1_us,
         qubit_t2_us=qubit_t2_us,
         cavity_t1_us=cavity_t1_us,
@@ -265,6 +269,7 @@ def calibration_parameter_summary(
         "mu_qub": float(params.mu_qub),
         "mu_cav": float(params.mu_cav),
         "cavity_phase_rad": float(params.cavity_phase),
+        "qubit_phase_rad": float(params.qubit_phase),
     }
     if config.fit_decoherence:
         out.update(

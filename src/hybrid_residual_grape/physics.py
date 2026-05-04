@@ -42,6 +42,7 @@ class PhysicsParams:
     grape_dispersive_frame: bool = True
     grape_cavity_iq: bool = True
     cavity_phase: float = 0.0
+    qubit_phase: float = 0.0
     qubit_t1_us: float | None = None
     qubit_t2_us: float | None = None
     cavity_t1_us: float | None = None
@@ -220,6 +221,8 @@ class FockPhysicsModel:
     ) -> jax.Array:
         p = physics_params
         e_qub, e_cav = self.control_fields(controls)
+        qubit_phase = jnp.exp(1j * p.qubit_phase)
+        e_qub = qubit_phase * e_qub
         cavity_phase = jnp.exp(1j * p.cavity_phase)
         if p.grape_cavity_iq:
             e_cav = cavity_phase * 1j * jnp.conj(e_cav)
@@ -260,6 +263,8 @@ class FockPhysicsModel:
             return psi @ hconj(psi)
 
         e_qub, e_cav = self.control_fields(controls)
+        qubit_phase = jnp.exp(1j * p.qubit_phase)
+        e_qub = qubit_phase * e_qub
         cavity_phase = jnp.exp(1j * p.cavity_phase)
         if p.grape_cavity_iq:
             e_cav = cavity_phase * 1j * jnp.conj(e_cav)

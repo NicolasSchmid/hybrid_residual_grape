@@ -30,6 +30,7 @@ class PhysicalCalibrationConfig:
     prior_strength: float = 2e-3
     learning_rate: float = 0.04
     fit_steps: int = 80
+    batch_size: int | None = None
     probability_floor: float = 1e-5
     measurement_response: MeasurementResponse | None = None
 
@@ -191,6 +192,9 @@ def fit_physical_parameters(
 
     optimizer = optax.adam(config.learning_rate)
     opt_state = optimizer.init(initial_raw)
+    controls = jnp.asarray(controls)
+    successes = jnp.asarray(successes)
+    shots = jnp.asarray(shots)
 
     def objective(raw):
         return calibration_loss(
@@ -205,6 +209,35 @@ def fit_physical_parameters(
         )
 
     value_and_grad = jax.value_and_grad(objective, has_aux=True)
+
+    if config.batch_size is not None:
+        batch_size = int(config.batch_size)
+        if batch_size <= 0:
+            raise ValueError("PhysicalCalibrationConfig.batch_size must be positive.")
+        num_points = int(controls.shape[0])
+        batch_size = min(batch_size, num_points)
+        history_rows = []
+        raw = initial_raw
+        for step_index in range(config.fit_steps):
+            start = (step_index * batch_size) % num_points
+            indices = (jnp.arange(batch_size) + start) % num_points
+            raw, opt_state, row = _calibration_optimizer_step(
+                raw,
+                opt_state,
+                controls[indices],
+                successes[indices],
+                shots[indices],
+                optimizer,
+                model,
+                nominal_params,
+                reference_params,
+                config,
+            )
+            history_rows.append(row)
+
+        history = jnp.stack(history_rows) if history_rows else jnp.zeros((0, 6))
+        params = params_from_calibration_raw(raw, nominal_params, reference_params, config)
+        return raw, params, history
 
     def step(carry, _):
         raw, opt_state = carry
@@ -224,6 +257,45 @@ def fit_physical_parameters(
     )
     params = params_from_calibration_raw(raw, nominal_params, reference_params, config)
     return raw, params, history
+
+
+def _calibration_optimizer_step_impl(
+    raw: jax.Array,
+    opt_state: optax.OptState,
+    controls: jax.Array,
+    successes: jax.Array,
+    shots: jax.Array,
+    optimizer: optax.GradientTransformation,
+    model: FockPhysicsModel,
+    nominal_params: PhysicsParams,
+    reference_params: PhysicsParams,
+    config: PhysicalCalibrationConfig,
+) -> tuple[jax.Array, optax.OptState, jax.Array]:
+    def objective(one_raw):
+        return calibration_loss(
+            one_raw,
+            model,
+            nominal_params,
+            reference_params,
+            controls,
+            successes,
+            shots,
+            config,
+        )
+
+    (loss, aux), grad = jax.value_and_grad(objective, has_aux=True)(raw)
+    grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
+    updates, opt_state = optimizer.update(grad, opt_state, raw)
+    raw = optax.apply_updates(raw, updates)
+    raw = jnp.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+    row = jnp.concatenate([aux, jnp.array([jnp.linalg.norm(grad)])])
+    return raw, opt_state, row
+
+
+_calibration_optimizer_step = jax.jit(
+    _calibration_optimizer_step_impl,
+    static_argnums=(5, 6, 7, 8, 9),
+)
 
 
 def adaptive_shot_counts(

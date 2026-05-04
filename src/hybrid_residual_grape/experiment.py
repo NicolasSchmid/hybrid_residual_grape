@@ -1,9 +1,49 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
 
 from .physics import FockPhysicsModel
+
+
+@dataclass(frozen=True)
+class MeasurementResponse:
+    """Monotone map from physical Fock probability to observed yes probability.
+
+    The real selective-pi-pulse measurement is not exactly ``Pr(yes)=P_n``:
+    state decay during the pulse, readout assignment errors, and small coherent
+    imperfections create a response curve with a nonzero floor, contrast below
+    one, and mild nonlinearity.
+    """
+
+    false_positive: float = 0.0
+    true_positive: float = 1.0
+    curvature: float = 0.0
+
+
+def observed_probability_from_physical(
+    physical_probability: jax.Array,
+    response: MeasurementResponse | None = None,
+) -> jax.Array:
+    """Apply a smooth monotone measurement-response curve."""
+    physical_probability = jnp.clip(jnp.asarray(physical_probability), 0.0, 1.0)
+    if response is None:
+        return physical_probability
+
+    # Endpoints remain fixed while the middle bends slightly. For
+    # |curvature| <~ 0.5 this remains monotone on [0, 1].
+    curved = physical_probability + response.curvature * (
+        4.0
+        * physical_probability
+        * (1.0 - physical_probability)
+        * (physical_probability - 0.5)
+    )
+    curved = jnp.clip(curved, 0.0, 1.0)
+    false_positive = jnp.asarray(response.false_positive)
+    true_positive = jnp.asarray(response.true_positive)
+    return false_positive + (true_positive - false_positive) * curved
 
 
 def sample_binomial_measurements(
@@ -12,10 +52,17 @@ def sample_binomial_measurements(
     key: jax.Array,
     *,
     shots: int | jax.Array,
+    response: MeasurementResponse | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Simulate an experiment: one physics evolution plus binomial shot sampling."""
+    """Simulate an experiment: one evolution plus response and binomial shots.
+
+    The third return value is the hidden physical Fock probability, not the
+    observed yes probability used for sampling. This keeps diagnostics readable
+    while the optimizer only sees successes and shot counts.
+    """
     key, shot_key = jax.random.split(key)
     true_probability = true_model.population_probability(controls)
+    observed_probability = observed_probability_from_physical(true_probability, response)
     if jnp.ndim(jnp.asarray(shots)) == 0:
         shot_counts = jnp.full((controls.shape[0],), shots, dtype=jnp.float32)
     else:
@@ -23,7 +70,7 @@ def sample_binomial_measurements(
     successes = jax.random.binomial(
         shot_key,
         n=shot_counts,
-        p=true_probability,
+        p=observed_probability,
         shape=true_probability.shape,
     )
     return successes.astype(jnp.float32), shot_counts, true_probability, key

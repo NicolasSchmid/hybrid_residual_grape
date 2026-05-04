@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from .experiment import MeasurementResponse, observed_probability_from_physical
 from .physics import FockPhysicsModel, PhysicsParams
 
 
@@ -30,6 +31,7 @@ class PhysicalCalibrationConfig:
     learning_rate: float = 0.04
     fit_steps: int = 80
     probability_floor: float = 1e-5
+    measurement_response: MeasurementResponse | None = None
 
 
 def physical_parameter_names(
@@ -147,8 +149,12 @@ def calibration_loss(
 ) -> tuple[jax.Array, jax.Array]:
     params = params_from_calibration_raw(raw, nominal_params, reference_params, config)
     probability = model.population_probability_with_params(controls, params)
-    nll = binomial_negative_log_likelihood(
+    observed_probability = observed_probability_from_physical(
         probability,
+        config.measurement_response,
+    )
+    nll = binomial_negative_log_likelihood(
+        observed_probability,
         successes,
         shots,
         probability_floor=config.probability_floor,

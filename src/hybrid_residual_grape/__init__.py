@@ -8,7 +8,13 @@ from .calibration import (
     physical_parameter_names,
     physical_parameter_size,
 )
-from .experiment import append_dataset, make_local_experiment_batch, sample_binomial_measurements
+from .experiment import (
+    MeasurementResponse,
+    append_dataset,
+    make_local_experiment_batch,
+    observed_probability_from_physical,
+    sample_binomial_measurements,
+)
 from .feature_residual import (
     FEATURE_NAMES,
     FeatureRBFResidualModel,
@@ -29,6 +35,7 @@ __all__ = [
     "FeatureRBFResidualModel",
     "FockPhysicsModel",
     "HybridGrapeConfig",
+    "MeasurementResponse",
     "PhysicalCalibrationConfig",
     "PhysicsParams",
     "RBFResidualConfig",
@@ -45,6 +52,7 @@ __all__ = [
     "fit_physical_parameters",
     "fit_rbf_residual",
     "make_local_experiment_batch",
+    "observed_probability_from_physical",
     "optimize_feature_hybrid_grape",
     "optimize_hybrid_grape",
     "params_from_calibration_raw",

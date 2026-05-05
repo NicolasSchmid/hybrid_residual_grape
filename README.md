@@ -1,66 +1,60 @@
 # Simplified Adaptive GRAPE
 
-## A Small Textbook On The Method
+## A Short Course On The Method
 
-This repository is about one question:
+This repository is a stripped-down research prototype for closed-loop Fock-state
+preparation.
 
-> If GRAPE works very well on a physics model, but the real experiment is
-> slightly different from that model, can we use measured data from the
-> experiment to adapt the model and therefore choose better pulses?
+The basic idea is:
 
-The project is intentionally not framed as reinforcement learning. There is no
-long-horizon policy here. A single pulse is played, the cavity ends in some
-state, and we measure whether the target Fock component was prepared. The
-learning problem is closer to **model-based experimental design**:
+```text
+use GRAPE to find a good pulse in a physics model
+measure the real experiment near that pulse
+fit the physics/readout model to the measurements
+run GRAPE again with the calibrated model
+repeat
+```
 
-1. keep a differentiable physics model,
-2. use GRAPE to optimize the pulse in that model,
-3. measure real or simulated experimental outcomes near that pulse,
-4. recalibrate the model from those measurements,
-5. repeat.
+The important point is that this is not a replacement of GRAPE by a generic
+black-box optimizer. GRAPE is still the engine that updates the pulse. The
+closed loop tries to make the model used by GRAPE less wrong.
 
 ![Simplified adaptive GRAPE overview](docs/adaptive_grape_overview.png)
 
-The exact equations and implementation choices are written below, because the
-image is only the blackboard summary.
+The current code is intentionally concentrated in
+`Simplified_adaptive_grape/`. The most complete notebook is
+`Simplified_adaptive_grape/closed_loop_adaptive_grape.ipynb`.
 
 ---
 
-## 1. The Learning Problem
+## 1. What Is Observed
 
-We want to prepare a target Fock state `|n>` in a 3D cavity coupled to a qubit.
-The object we care about is
-
-```text
-P_true,n(u) = probability that the cavity contains n photons after pulse u.
-```
-
-In real hardware, `P_true,n(u)` is not directly visible. What we can do is:
-
-1. play a pulse `u`,
-2. apply a long selective qubit pulse that tests the photon number,
-3. read out the qubit,
-4. obtain a noisy binary result.
-
-So the experiment is a black-box measurement process:
+The hidden physical goal is to prepare a Fock state `|n>` in the cavity. For a
+control pulse `u`, the ideal diagnostic quantity is
 
 ```text
-u  ->  experiment  ->  measured readout y.
+P_true,n(u) = Pr(cavity has n photons after the pulse).
 ```
 
-But unlike pure black-box optimization, we also have a strong prior: a
-differentiable Hamiltonian simulator. The whole method is built around the idea
-that the simulator is good enough to guide GRAPE, but not perfect enough to be
-trusted forever without experimental feedback.
+In the real experiment we do not directly observe `P_true,n`. We probe the
+cavity through the qubit using a long photon-number-selective pulse, then read
+out the qubit. The raw data is therefore a binary count:
+
+```text
+k successes out of N shots.
+```
+
+The optimizer sees `k/N`. The hidden simulator can also report `P_true,n`, but
+that is only a diagnostic for the notebook.
 
 ---
 
-## 2. The Pulse Parameters `u`
+## 2. The Control Pulse `u`
 
-The pulse is represented by `80` real numbers:
+The pulse has 80 real coefficients:
 
 ```text
-u in R^80 = 4 channels x 20 B-spline coefficients.
+u in R^80 = 4 channels x 20 quadratic B-spline coefficients.
 ```
 
 The four channels are:
@@ -69,42 +63,37 @@ The four channels are:
 qubit I, qubit Q, cavity I, cavity Q.
 ```
 
-Those coefficients are expanded into smooth time-dependent envelopes:
+The B-spline basis comes from the local `toolbox`. The first two and last two
+basis functions are skipped, so all basis pulses have the same shape, the
+control starts and ends at zero, and at most three quadratic B-splines overlap.
 
-```text
-u  ->  e_q(t), e_c(t).
-```
-
-The notebooks use quadratic B-splines from the local `toolbox`. The first two
-and last two splines are skipped so that the physical pulse starts and ends at
-zero. With quadratic splines, at most three basis functions overlap at once,
-which keeps the pulse shape close to something that can be played cleanly on
-hardware.
-
-Every coefficient is clipped:
+Every coefficient is clipped to the hardware-like range:
 
 ```text
 -2 <= u_j <= 2.
 ```
 
-In machine-learning language, `u` is the **decision variable** or **design
-variable**. It is the thing GRAPE updates.
+GRAPE updates this vector `u`.
 
 ---
 
-## 3. The Model Parameters `p`
+## 3. The Physics Model `p`
 
-The simulator has parameters `p`. These are the things we believe might be
-slightly wrong in the nominal Hamiltonian.
-
-In the current closed-loop notebook, the fitted parameter vector has eight
-entries:
+The differentiable simulator maps the controls and Hamiltonian parameters to a
+final state:
 
 ```text
-p_raw in R^8
+u, p -> final state -> P_model(m | u, p)
 ```
 
-After bounded `tanh` transforms, these correspond to:
+where `P_model(m | u, p)` is the full cavity photon-number distribution. The
+target probability used by GRAPE is one component of that distribution:
+
+```text
+P_model,n(u, p) = P_model(m = n | u, p).
+```
+
+The current adaptive notebook fits six model parameters:
 
 ```text
 chi shift
@@ -113,258 +102,257 @@ cavity frequency shift
 cavity self-Kerr
 qubit drive amplitude factor
 cavity drive amplitude factor
-readout contrast A
-readout offset B
 ```
 
-The fitted simulator predicts a physical Fock probability:
-
-```text
-P_model,n(u; p).
-```
-
-The readout part then converts that predicted physical probability into a
-predicted measured value:
-
-```text
-y_pred(u; p, A, B) = A * P_model,n(u; p) + B.
-```
-
-At the moment, the closed-loop notebook keeps `T1/T2` fixed during fitting. The
-non-unitary phase uses open-system evolution, but it does not fit the lifetime
-parameters themselves. That is a deliberate simplification: first learn whether
-the Hamiltonian and readout calibration are enough before opening a larger
-parameter space.
+These are not fitted by comparing state vectors. They are fitted only through
+the same binary readout data that the experiment would provide.
 
 ---
 
-## 4. The Observation Model
+## 4. The Photon-Selective Readout Model
 
-The hidden true simulator plays the role of the real experiment. It has small
-mismatches relative to the model: small frequency shifts, Kerr terms, amplitude
-miscalibration, and decoherence.
+The readout is no longer modeled as a simple linear function of only
+`P_model,n`. That is too restrictive: a real selective pulse can have finite
+width, small detuning, imperfect contrast, and weak sensitivity to neighboring
+photon numbers.
 
-For a pulse `u`, the true simulator produces a hidden probability:
-
-```text
-P_true,n(u).
-```
-
-Then the experiment-like measurement samples finite shots:
+Instead, the notebook uses a small photon-number kernel. For each photon number
+`m`, define
 
 ```text
-k ~ Binomial(N_shots, P_true,n(u)).
+s_m(theta)
+  = eps + (1 - eps) exp[-0.5 ((m - (n_target + delta)) / sigma)^2].
 ```
 
-The notebook currently uses `N_shots = 500` for local probing. The measured
-readout is then distorted by a simple affine contrast model:
+Interpretation:
 
 ```text
-y = A_true * k / N_shots + B_true.
+delta  shifts the center of the selective readout
+sigma  sets its photon-number width
+eps    gives a weak off-target response
 ```
 
-The values are chosen so that roughly
+The predicted probability of observing a qubit-readout success is then
 
 ```text
-P_true,n = 0  ->  y about 0.01
-P_true,n = 1  ->  y about 0.93
+q_model(u, p, theta)
+  = q_dark
+    + (q_bright - q_dark) sum_m s_m(theta) P_model(m | u, p).
 ```
 
-This imitates the fact that the long selective pi pulse and qubit readout are
-not an ideal photon-number oracle. Even a perfect Fock state would not
-necessarily produce measured value `1.0`, and even a bad state can produce a
-small false-positive offset.
-
-The important conceptual distinction is:
+The five fitted readout parameters are:
 
 ```text
-P_true,n     hidden physical fidelity, diagnostic only
-y            noisy measured value, available to the optimizer
-P_model,n    model-predicted physical fidelity
-y_pred       model-predicted measurement
+q_dark    false-positive floor
+q_bright  bright-readout probability
+delta     selectivity-center shift
+sigma     selectivity width
+eps       off-target leakage
 ```
 
-The calibration step should compare `y_pred` to `y`, not `P_model,n` directly
-to `P_true,n`, because the real experiment does not reveal `P_true,n`.
+So the current calibration vector contains 11 fitted quantities:
+
+```text
+6 Hamiltonian/control-calibration parameters
++ 5 photon-selective readout parameters
+= 11 fitted parameters.
+```
+
+The raw trainable variables are mapped through bounded transforms, mostly
+`tanh`, so the fit stays in a reasonable physical range.
 
 ---
 
-## 5. Two Nested Optimizations
+## 5. The Hidden True Experiment
 
-The method alternates two different optimization problems. Confusing these two
-is the easiest way to misunderstand the notebook.
-
-### 5.1 Control Update: GRAPE
-
-During a GRAPE step, the model parameters are fixed.
+The notebook has a hidden true simulator that plays the role of the hardware.
+It deliberately differs slightly from the model used by GRAPE:
 
 ```text
-fixed:      p, A, B
+slightly shifted chi
+small qubit and cavity frequency shifts
+small cavity self-Kerr
+small drive miscalibrations
+decay and dephasing in the open-system phase
+```
+
+The hidden readout uses the same photon-selective form, but with different
+parameters and one extra offset:
+
+```text
+q_true(u)
+  = q_dark,true
+    + (q_bright,true - q_dark,true) sum_m s_m,true P_true(m | u)
+    + offset_true.
+```
+
+In the current notebook,
+
+```text
+offset_true = 0.020.
+```
+
+The fitted model does not include this independent offset. This makes the
+simulated experiment mildly misspecified, which is useful: if the method only
+works when the model class is exactly true, it is probably too fragile.
+
+The actual measured data is sampled as
+
+```text
+k ~ Binomial(N_shots, q_true(u)).
+```
+
+For the local probe pulses, the notebook currently uses `N_shots = 500`.
+
+---
+
+## 6. Two Learning Problems In One Loop
+
+There are two gradients, both computed by JAX, but with respect to different
+variables.
+
+### GRAPE Updates The Controls
+
+During GRAPE, the model parameters are fixed:
+
+```text
+fixed:      p, theta
 optimized: u
 ```
 
-The objective is approximately
+The objective is essentially
 
 ```text
-loss_u(u) = 1 - P_model,n(u; p) + pulse_penalty(u).
+loss_control(u) = 1 - P_model,n(u, p) + pulse_penalty(u).
 ```
 
-Because the simulator is written in JAX, the code computes
+JAX differentiates this loss with respect to the 80 pulse coefficients. Each new
+GRAPE run is warm-started from the previous good pulse.
+
+### Calibration Updates The Model
+
+During calibration, the measured controls and shot counts are fixed:
 
 ```text
-grad_u loss_u
+fixed:      measured controls u_i, successes k_i, shots N_i
+optimized: p, theta
 ```
 
-by automatic differentiation through the pulse expansion and time evolution.
-This is the same practical role as GRAPE: obtain a gradient of final fidelity
-with respect to pulse amplitudes.
-
-After each optimizer step:
+For every measured pulse, the model predicts
 
 ```text
-u <- clip(u, -2, 2).
+q_i = q_model(u_i, p, theta).
 ```
 
-The next GRAPE run is warm-started from the previous best pulse. This matters:
-once the pulse is already good, we do not want to rediscover it from random
-initialization every round. We want to refine it under the newly calibrated
-model.
-
-### 5.2 Parameter Update: Model Calibration
-
-During a calibration step, the measured controls are fixed.
+The fit minimizes the binomial negative log likelihood:
 
 ```text
-fixed:      measured pulses u_i and measured outcomes y_i
-optimized: p, A, B
+loss_model(p, theta)
+  = mean_i [
+      - k_i log(q_i)
+      - (N_i - k_i) log(1 - q_i)
+    ] / N_i.
 ```
 
-For each measured pulse, the model predicts
+This is the right loss for shot data. It also lets the readout parameters and
+Hamiltonian parameters learn together with the same optimizer.
+
+---
+
+## 7. Do We Reuse Old Measurements?
+
+Yes. The closed-loop notebook accumulates all previous measurements:
 
 ```text
-y_pred_i = A * P_model,n(u_i; p) + B.
+D_t = D_{t-1} union new measurements from round t.
 ```
 
-The current notebook fits parameters with a mean-squared prediction loss:
+The calibration mini-batches are drawn from the accumulated dataset, not only
+from the newest local cloud. This is the natural default if the hardware is
+stationary.
+
+If the real device drifts during the run, the next thing to add would be a
+sliding window or a time-decayed likelihood, so recent measurements matter more
+than old ones.
+
+---
+
+## 8. The Closed-Loop Experiment
+
+The notebook runs the following loop:
 
 ```text
-loss_p(p, A, B) = mean_i((y_pred_i - y_i)^2).
+initialize u, p, theta
+
+for each round:
+
+    1. GRAPE
+       optimize u in the current calibrated model
+
+    2. local probing
+       generate nearby pulses around the optimized pulse
+       run the hidden experiment with finite shots
+
+    3. calibration
+       fit p and theta on the accumulated shot data
+
+    4. repeat from the best pulse found so far
 ```
 
-Again, JAX differentiates through the simulator, but now the derivative is with
-respect to the Hamiltonian/readout parameters, not the pulse:
+The early phase uses unitary evolution for speed. The later phase switches to
+open-system evolution with decay/dephasing. In the current simplified version,
+the decay constants are used but not fitted.
+
+---
+
+## 9. How To Read The Diagnostics
+
+The most important comparison is not a single curve. There are two distinct
+questions.
+
+### Does the model predict the measured readout?
+
+This compares
 
 ```text
-grad_p loss_p.
+q_model(u, p, theta)
 ```
 
-So the same differentiable simulator supports two different gradients:
+against the observed fraction
 
 ```text
-GRAPE:        d loss / d u
-calibration:  d loss / d p
+k / N.
+```
+
+If this is bad, the calibrated model is not explaining the actual data seen by
+the optimizer.
+
+### Does the model predict the physical Fock population?
+
+In simulation only, we can also compare
+
+```text
+P_model,n(u, p)  versus  P_true,n(u).
+```
+
+This tells us whether the model is learning the physical fidelity, not just the
+readout response. On real hardware, this curve is hidden.
+
+### Why plot log infidelity?
+
+When fidelities get close to one, ordinary plots hide important differences.
+For example, `0.99`, `0.999`, and `0.9999` are all visually near the top of a
+linear probability plot. The useful scale is often
+
+```text
+log(1 - P_n).
 ```
 
 ---
 
-## 6. Do We Use All Previous Measurements?
+## 10. Notebook Order
 
-Yes. The closed-loop notebook accumulates the full dataset.
-
-After each local probing round, the new measured pulses are appended:
-
-```text
-D_t = D_{t-1} union {(u_i, y_i)} from the new round.
-```
-
-Then the parameter fit samples mini-batches from the full accumulated dataset,
-not only from the latest 500 points.
-
-This is the right default for a stationary simulated experiment because older
-measurements are still valid information about the same Hamiltonian. Using all
-past data helps stabilize the fit and reduces the chance that the fitted
-parameters chase one noisy local cloud of measurements.
-
-There are two cases where we might not want to use all data equally:
-
-1. **The experiment drifts in time.**
-   Then old data may become misleading. A sliding window or exponential
-   forgetting factor would be better.
-
-2. **The pulse moves to a very different region of control space.**
-   Then old points may be less relevant to the local optimum. A weighted loss
-   that gives more importance to nearby controls could help.
-
-For now, the code assumes the hidden true model is stationary, so all measured
-points are useful.
-
----
-
-## 7. The Closed-Loop Algorithm
-
-The main notebook follows this structure.
-
-```text
-initialize pulse u_0
-initialize model parameters p_0
-initialize empty dataset D
-
-for each closed-loop round:
-
-    1. GRAPE step
-       optimize u using P_model,n(u; p)
-       warm-start from previous best pulse
-
-    2. local probing step
-       generate pulses near the optimized pulse
-       measure each pulse with finite-shot true-model readout
-       append all results to D
-
-    3. calibration step
-       fit p, A, B on all accumulated data D
-       warm-start from previous fitted p
-
-    4. repeat
-```
-
-The first phase uses unitary evolution for speed. The second phase switches to
-non-unitary evolution, so the optimized pulses are judged by a model that can
-include decay and dephasing.
-
----
-
-## 8. Why Not Just Fit A Neural Network?
-
-A neural network could learn a flexible map
-
-```text
-u -> y.
-```
-
-That is attractive if the mismatch between model and experiment is complicated.
-But it has two drawbacks here:
-
-1. The input is 80-dimensional, and high-fidelity regions may be very small.
-   A generic neural network may need many measurements before it extrapolates
-   reliably.
-
-2. GRAPE already gives a strong differentiable structure. If we throw that
-   away, we lose a lot of physics.
-
-The adaptive-GRAPE approach keeps the physics model as the main object and uses
-measurements to correct the parameters that matter near the pulses we are
-actually trying. This is a conservative first step before adding more flexible
-residual models.
-
----
-
-## 9. How To Read The Notebooks
-
-The notebooks are written as experiments, not as a large software framework.
-Most of the physics is kept visible in notebook cells so that it is easy to
-modify.
-
-Use this order:
+The simplified project is meant to be read in this order:
 
 ```text
 1. Simplified_adaptive_grape/test_grape.ipynb
@@ -372,84 +360,36 @@ Use this order:
 3. Simplified_adaptive_grape/closed_loop_adaptive_grape.ipynb
 ```
 
-### `test_grape.ipynb`
+`test_grape.ipynb` checks the basic GRAPE implementation and compares unitary
+and non-unitary optimization.
 
-This is the base GRAPE check. It shows the pulse basis, the Hamiltonian, unitary
-GRAPE, non-unitary GRAPE, and a dynamiqs double check.
+`adaptive_grape_parameter_fit.ipynb` tests one local calibration problem:
+optimize a pulse, probe nearby pulses, and fit model parameters from those
+measurements.
 
-### `adaptive_grape_parameter_fit.ipynb`
-
-This notebook checks whether a dataset of nearby measured pulses is enough to
-fit Hamiltonian and readout parameters once.
-
-### `closed_loop_adaptive_grape.ipynb`
-
-This is the closed-loop version. It alternates GRAPE, local probing, and model
-calibration over many rounds.
-
----
-
-## 10. What To Look At In The Plots
-
-When judging whether the method works, do not look at a single curve in
-isolation.
-
-The useful comparisons are:
-
-### Model-predicted measurement versus measured value
-
-This checks whether the fitted model predicts what the experiment actually
-returns:
-
-```text
-A * P_model,n(u; p) + B   versus   measured y.
-```
-
-If this fails, the fitted model is not explaining the data.
-
-### Model-predicted probability versus hidden true probability
-
-This is a simulation-only diagnostic:
-
-```text
-P_model,n(u; p)   versus   P_true,n(u).
-```
-
-In real hardware we cannot plot `P_true,n`, but in simulation it tells us
-whether the calibration moved the physics model closer to the hidden truth.
-
-### Log infidelity
-
-Near high fidelity, normal probability plots become visually uninformative.
-Plotting
-
-```text
-log(1 - P_n)
-```
-
-makes the difference between `0.99`, `0.999`, and `0.9999` visible.
+`closed_loop_adaptive_grape.ipynb` is the current main experiment: alternate
+GRAPE, local probing, and Hamiltonian/readout calibration.
 
 ---
 
 ## 11. Current Simplifications
 
-The current code is deliberately simple.
+The code is intentionally simple. The main simplifications are:
 
-- The local probing cloud is random around the current pulse; it is not yet a
-  sophisticated optimal experimental design strategy.
-- The fit currently uses MSE on the observed readout values. A binomial
-  likelihood using raw successes and shot counts would be statistically cleaner.
-- `T1/T2` are used in the non-unitary simulation path but are not fitted in the
-  current closed-loop parameter vector.
-- The readout response is affine in the fit, while the real selective-pulse
-  response might be mildly nonlinear.
+```text
+local probe pulses are random perturbations, not optimal experimental design
+the readout kernel is symmetric and Gaussian-like
+the hidden readout has an offset not included in the fitted model
+T1/T2 are used in open-system simulation but not fitted
+old measurements are weighted equally, so drift is not modeled
+```
 
-These are good places to improve the method once the simplified loop is easy to
-understand and debug.
+These are good next places to improve if the closed loop works in simulation but
+fails on hardware.
 
 ---
 
-## 12. Running The Project
+## 12. Running
 
 From the repository root:
 
@@ -459,10 +399,6 @@ uv sync
 
 Then open the notebooks in `Simplified_adaptive_grape/`.
 
-The `pyproject.toml` is set up for the DGX/Grace Hopper environment with
-CUDA-enabled JAX. On a local Mac without an NVIDIA GPU, use a local CPU-only JAX
-setup instead.
-
-The local `toolbox/` directory contains the small subset needed by the
-notebooks: B-splines, quantum operators/states, and simple Schrodinger/Lindblad
-solvers.
+The project includes the small local `toolbox/` subset used by the notebooks:
+B-splines, quantum operators/states, and simple unitary/Lindblad evolution
+helpers.

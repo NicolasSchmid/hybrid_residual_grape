@@ -332,7 +332,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hybrid-residual-grape"
+name = "simplified-adaptive-grape"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
